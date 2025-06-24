@@ -1,4 +1,4 @@
-```
+
 # Log Analyzer with Anomaly Detection & Payload Extraction
 
 This project automates the analysis of log files to identify anomalies, classify suspicious lines, extract relevant payloads, and generate structured Excel reports.
