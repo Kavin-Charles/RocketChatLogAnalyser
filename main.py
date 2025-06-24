@@ -6,6 +6,7 @@ from transformers import pipeline
 from datasets import Dataset
 from concurrent.futures import ThreadPoolExecutor
 from typing import List
+import requests
 
 device = 0 if torch.cuda.is_available() else -1
 
@@ -15,23 +16,15 @@ classifier = pipeline(
     device=device
 )
 
-import requests
-
-import requests
-
 def upload_to_pasters(text: str) -> str:
-    """Uploads long text to paste.rs and returns the link."""
     try:
         response = requests.post("https://paste.rs", data=text.encode('utf-8'), timeout=10)
         if response.ok:
             return response.text.strip()
         else:
-            print(f"paste.rs upload failed: {response.status_code} - {response.text}")
             return ""
-    except Exception as e:
-        print(f"Error uploading to paste.rs: {e}")
+    except Exception:
         return ""
-
 
 LABELS = ["normal", "error", "warning", "info", "security"]
 THRESHOLD = 0.6
@@ -39,15 +32,12 @@ BATCH_SIZE = 32
 EXCEL_PATH = "anomalies.xlsx"
 KEYWORDS = re.compile(r"(error|fail|missing|exception|unauthorized|denied|invalid|crash)", re.IGNORECASE)
 
-
 def is_suspicious(line: str) -> bool:
     return bool(KEYWORDS.search(line))
-
 
 def extract_date(filename):
     match = re.match(r"(\d{4}-\d{2}-\d{2})", filename)
     return match.group(1) if match else "unknown"
-
 
 def normalize_to_txt(file_path: Path, target_root: Path) -> Path | None:
     try:
@@ -62,7 +52,6 @@ def normalize_to_txt(file_path: Path, target_root: Path) -> Path | None:
         return target_path
     except Exception:
         return None
-
 
 def parallel_filter_lines(lines: List[str]):
     results = []
@@ -80,7 +69,6 @@ def parallel_filter_lines(lines: List[str]):
 
     return results
 
-
 def classify_lines_with_datasets(entries: List[dict]) -> List[dict]:
     dataset = Dataset.from_list(entries)
 
@@ -94,11 +82,8 @@ def classify_lines_with_datasets(entries: List[dict]) -> List[dict]:
     classified = dataset.map(classify, batched=True, batch_size=BATCH_SIZE)
     return classified.to_dict()
 
-
 def extract_payload(start_index, fsr_ids, all_lines, is_api_failure):
     payload_lines = []
-
-    # Check if it's an S3 error with 403
     s3_error = False
     look_above = False
     for offset in range(start_index, min(start_index + 10, len(all_lines))):
@@ -109,7 +94,6 @@ def extract_payload(start_index, fsr_ids, all_lines, is_api_failure):
             break
 
     if is_api_failure or look_above:
-        # Search upward (above the error line)
         for offset in range(start_index - 1, max(0, start_index - 20), -1):
             line = all_lines[offset].strip()
             if any(kw in line.lower() for kw in ["payload", "request", "params", "data", "body", "{", "}"]):
@@ -119,7 +103,6 @@ def extract_payload(start_index, fsr_ids, all_lines, is_api_failure):
             elif payload_lines:
                 break
     else:
-        # Default: Search downward
         for offset in range(start_index + 1, min(start_index + 10, len(all_lines))):
             line = all_lines[offset].strip()
             if any(kw in line.lower() for kw in ["payload", "request", "params", "data", "body", "{", "}"]):
@@ -135,33 +118,18 @@ def extract_payload(start_index, fsr_ids, all_lines, is_api_failure):
 
     return ""
 
-
-import re
-
 def extract_exception_payload(exception_lines, all_lines, error_start_idx, window_size=50):
-    """
-    Smart payload extractor:
-    - If the error mentions '_id', return the closest previous payload block that includes '_id'
-    - Otherwise, return payloads only if they relate contextually (e.g., 'email', 'send', 'notification')
-    """
-
     start_idx = None
     payload_lines = []
-
-    # Step 1: Determine if '_id' is part of the error context
     error_text = " ".join(exception_lines).lower()
     is_id_related = '_id' in error_text
 
-    # Step 2: Look backward for a structured payload block
     for i in range(error_start_idx, max(0, error_start_idx - window_size), -1):
         line = all_lines[i].strip()
-
         if '[Object: null prototype]' in line or 'request' in line:
-            # Temporarily collect this block to evaluate
             temp_payload = []
             for j in range(i, min(len(all_lines), i + window_size)):
                 temp_line = all_lines[j].rstrip()
-
                 if (
                     j != i and (
                         re.search(r"(Exception|Traceback|Error|errorType|rejectedErrors|at\s)", temp_line) or
@@ -173,7 +141,6 @@ def extract_exception_payload(exception_lines, all_lines, error_start_idx, windo
 
             block_text = "\n".join(temp_payload).lower()
 
-            # Matching rules:
             if is_id_related and '_id' in block_text:
                 return "\n".join(temp_payload)
 
@@ -182,8 +149,7 @@ def extract_exception_payload(exception_lines, all_lines, error_start_idx, windo
             ):
                 return "\n".join(temp_payload)
 
-    return None  # No valid payload block found
-
+    return None
 
 def classify_and_filter(classified_data, all_lines):
     output = []
@@ -247,12 +213,10 @@ def classify_and_filter(classified_data, all_lines):
             else:
                 payload = extract_payload(start_index, fsr_ids, all_lines, is_api_failure)
 
-            # Final payload processing
             if payload:
                 if len(payload) > 3000:
                     paste_url = upload_to_pasters(payload)
                     payload = paste_url if paste_url else "[Payload too long; upload failed]"
-
 
             output.append({
                 "line_num": line_num,
@@ -264,12 +228,10 @@ def classify_and_filter(classified_data, all_lines):
 
     return output
 
-
 def summarize_file(lines):
     summary_lines = [line for line in lines if is_suspicious(line)]
     keywords_found = set(KEYWORDS.findall(' '.join(summary_lines)))
     return f"Total suspicious lines: {len(summary_lines)}. Keywords found: {', '.join(keywords_found)}"
-
 
 def write_anomalies_to_excel(date, rows, summary, path=EXCEL_PATH):
     df = pd.DataFrame(rows)
@@ -282,7 +244,6 @@ def write_anomalies_to_excel(date, rows, summary, path=EXCEL_PATH):
         df.to_excel(w, sheet_name=date, index=False)
         if summary:
             pd.DataFrame([{"summary": summary}]).to_excel(w, sheet_name=f"{date}_summary", index=False)
-
 
 def analyze_log_file(file_path: Path, original_name: str, original_ext: str):
     try:
@@ -302,16 +263,13 @@ def analyze_log_file(file_path: Path, original_name: str, original_ext: str):
 
     return anomalies, summary
 
-
 def analyze_folder(raw_folder="logs", output_folder="normalized", excel_file=EXCEL_PATH):
     input_root = Path(raw_folder)
     output_root = Path(output_folder)
     if not input_root.exists():
-        print(f"Input folder '{raw_folder}' does not exist.")
         return
 
     raw_files = [f for f in input_root.rglob("*") if f.is_file()]
-    print(f"Found {len(raw_files)} files. Attempting to normalize and analyze...\n")
 
     normalized_files = []
     file_map = {}
@@ -329,9 +287,6 @@ def analyze_folder(raw_folder="logs", output_folder="normalized", excel_file=EXC
         anomalies, summary = analyze_log_file(txt_file, original_name, original_ext)
         if anomalies:
             write_anomalies_to_excel(date, anomalies, summary, excel_file)
-
-    print(f"\n✅ All anomalies saved to {excel_file}")
-
 
 if __name__ == "__main__":
     analyze_folder("logs", "normalized")
