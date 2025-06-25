@@ -47,7 +47,9 @@ def normalize_to_txt(file_path: Path, target_root: Path) -> Path | None:
         txt_name = file_path.name + ".txt"
         target_path = (target_root / relative.parent / txt_name)
         target_path.parent.mkdir(parents=True, exist_ok=True)
-        with target_path.open("w", encoding="utf-8") as dst:
+        mode = "a" if target_path.exists() else "w"
+
+        with target_path.open(mode, encoding="utf-8") as dst:
             dst.write(content)
         return target_path
     except Exception:
