@@ -120,11 +120,15 @@ def extract_payload(start_index, fsr_ids, all_lines, is_api_failure):
 
     return ""
 
+import re
+
 def extract_exception_payload(exception_lines, all_lines, error_start_idx, window_size=50):
     start_idx = None
     payload_lines = []
     error_text = " ".join(exception_lines).lower()
-    is_id_related = '_id' in error_text
+
+    if '_id' in error_text:
+        return None
 
     for i in range(error_start_idx, max(0, error_start_idx - window_size), -1):
         line = all_lines[i].strip()
@@ -143,12 +147,7 @@ def extract_exception_payload(exception_lines, all_lines, error_start_idx, windo
 
             block_text = "\n".join(temp_payload).lower()
 
-            if is_id_related and '_id' in block_text:
-                return "\n".join(temp_payload)
-
-            if not is_id_related and (
-                any(k in block_text for k in ["to:", "from:", "subject", "body"]) and "false" in block_text
-            ):
+            if any(k in block_text for k in ["to:", "from:", "subject", "body"]) and "false" in block_text:
                 return "\n".join(temp_payload)
 
     return None
